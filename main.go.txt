@@ -1,0 +1,271 @@
+package main
+
+import (
+	"fmt"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/tatsushid/go-fastping"
+)
+
+func pindHost(ip string) (unreachable bool, err error) {
+	pinger := fastping.NewPinger()
+	ra, err := net.ResolveIPAddr("ip4:icmp", ip)
+	if err != nil {
+		fmt.Printf("Ошибка разрешения адреса для %s: %v\n", ip, err)
+		return true, err
+	}
+
+	pinger.AddIPAddr(ra)
+	received := false
+	pinger.OnRecv = func(addr *net.IPAddr, rtt time.Duration) {
+		received = true
+		fmt.Printf("Получен ответ от %s: время=%v\n", addr.String(), rtt)
+	}
+	pinger.OnIdle = func() {
+		// Пинг завершён
+	}
+
+	// Настройки пинга
+	pinger.MaxRTT = time.Second * 5 // Таймаут
+	pinger.Size = 64                // Размер пакета
+	// pinger.Count = 4                // Количество пакетов
+
+	// fmt.Printf("PING %s:\n", ip)
+	err = pinger.Run()
+	if err != nil {
+		fmt.Printf("Ошибка при выполнении пинга для %s: %v\n", ip, err)
+		return true, err
+	}
+
+	if !received {
+		return true, nil // Хост недоступен
+	}
+	return false, nil
+}
+
+// listInterface возвращает список адресов активных интерфейсов и ошибку
+func listInterface() ([]net.Addr, error) {
+	var allAddrs []net.Addr
+
+	// Получаем список всех сетевых интерфейсов
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("ошибка при получении интерфейсов: %v", err)
+	}
+
+	// Проходим по каждому интерфейсу
+	for _, iface := range interfaces {
+		// Проверяем, что интерфейс активен (Up) и не является loopback
+		if iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0 {
+			fmt.Printf("Активный интерфейс: %s\n", iface.Name)
+			fmt.Printf("  MAC-адрес: %s\n", iface.HardwareAddr)
+			fmt.Printf("  MTU: %d\n", iface.MTU)
+			fmt.Printf("  Флаги: %s\n", iface.Flags)
+
+			// Получаем IP-адреса интерфейса
+			addrs, err := iface.Addrs()
+			if err != nil {
+				fmt.Printf("  Ошибка при получении адресов: %v\n", err)
+				continue
+			}
+
+			// Добавляем адреса в общий список
+			for _, addr := range addrs {
+				var ip net.IP
+				var mask net.IPMask
+				switch v := addr.(type) {
+				case *net.IPNet:
+					ip = v.IP
+					mask = v.Mask
+				case *net.IPAddr:
+					ip = v.IP
+				}
+
+				// Проверяем, что это IPv4
+				if ip != nil && ip.To4() != nil {
+					fmt.Printf("  IPv4-адрес: %s\n", addr.String())
+					if mask != nil {
+						fmt.Printf("  IP: %s, Маска: %s\n", ip.String(), net.IP(mask).String())
+					}
+					allAddrs = append(allAddrs, addr)
+				}
+			}
+		}
+	}
+
+	return allAddrs, nil
+}
+
+func countIP(ipAddr net.IP, maskStr net.IPMask) (ip string, countIp int64, err error) {
+	// Получаем строковое представление IP
+	ip = ipAddr.String()
+
+	// Проверяем, что IP-адрес является IPv4
+	if ipAddr.To4() == nil {
+		return "", 0, fmt.Errorf("поддерживаются только IPv4-адреса")
+	}
+
+	// Получаем количество битов в маске
+	ones, _ := maskStr.Size()
+	if ones == 0 {
+		return "", 0, fmt.Errorf("некорректная маска подсети")
+	}
+
+	// Количество хостовых битов
+	hostBits := 32 - ones
+
+	// Количество IP-адресов
+	countIp = 1 << hostBits
+
+	// Для подсети отнимаем 2 адреса (сетевой и широковещательный), если это не /31 или /32
+	if hostBits > 1 {
+		countIp -= 2
+	}
+
+	return ip, countIp, nil
+}
+
+// generateIPs генерирует список IP-адресов в подсети
+func generateIPs(networkIP net.IP, mask net.IPMask) ([]string, error) {
+	// Проверяем, что IP — IPv4
+	if networkIP.To4() == nil {
+		return nil, fmt.Errorf("поддерживаются только IPv4-адреса")
+	}
+
+	// Получаем количество битов в маске
+	ones, _ := mask.Size()
+	if ones == 0 {
+		return nil, fmt.Errorf("некорректная маска подсети")
+	}
+
+	// Количество хостовых битов
+	hostBits := 32 - ones
+	totalIPs := int64(1 << hostBits)
+
+	// Определяем диапазон адресов
+	var start, end int64
+	if hostBits <= 1 { // /31 или /32
+		start = 0
+		end = totalIPs
+	} else {
+		start = 1           // Пропускаем сетевой адрес
+		end = totalIPs - 1  // Пропускаем широковещательный адрес
+	}
+
+	// Генерируем IP-адреса
+	var ips []string
+	for i := start; i < end; i++ {
+		ipInt := ipToUint32(networkIP) + uint32(i)
+		newIP := uint32ToIP(ipInt)
+		ips = append(ips, newIP.String())
+	}
+
+	return ips, nil
+}
+
+// ipToUint32 преобразует net.IP (IPv4) в uint32
+func ipToUint32(ip net.IP) uint32 {
+	ip = ip.To4()
+	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+}
+
+// uint32ToIP преобразует uint32 в net.IP (IPv4)
+func uint32ToIP(n uint32) net.IP {
+	return net.IP{
+		byte(n >> 24),
+		byte(n >> 16),
+		byte(n >> 8),
+		byte(n),
+	}
+}
+
+func main() {
+	// Получаем адреса активных интерфейсов
+	addrs, err := listInterface()
+	if err != nil {
+		fmt.Printf("Ошибка: %v\n", err)
+		return
+	}
+
+	// Если адресов нет, выводим сообщение
+	if len(addrs) == 0 {
+		fmt.Println("IPv4-адреса не найдены")
+		return
+	}
+
+	// Проходим по всем адресам и извлекаем IP, маску и адрес сети
+	for _, addr := range addrs {
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip := v.IP.String()
+			mask := net.IP(v.Mask).String()
+			// Вычисляем адрес сети
+			networkIP := v.IP.Mask(v.Mask)
+			network := networkIP.String()
+			fmt.Printf("Сетевой интерфейс:\n")
+			fmt.Printf("  IP: %s\n", ip)
+			fmt.Printf("  Маска: %s\n", mask)
+			fmt.Printf("  Адрес сети: %s\n", network)
+
+			// Вызываем countIP для подсчета IP-адресов
+			_, countIp, err := countIP(v.IP, v.Mask)
+			if err != nil {
+				fmt.Printf("Ошибка для IP %s: %v\n", ip, err)
+				continue
+			}
+			fmt.Printf("  Количество доступных IP: %d\n", countIp)
+
+			// Генерируем IP-адреса в подсети
+			ips, err := generateIPs(networkIP, v.Mask)
+			if err != nil {
+				fmt.Printf("Ошибка при генерации IP-адресов: %v\n", err)
+				continue
+			}
+
+			// Список IP-адресов, которые не ответили на пинг
+			var listIp []string
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+
+			if len(ips) > 0 {
+				fmt.Printf("  Пинг IP-адресов в подсети:\n")
+				// Ограничиваем количество одновременных пингов
+				sem := make(chan struct{}, 20) // Максимум 20 одновременных пингов
+
+				for _, ipAddr := range ips {
+					wg.Add(1)
+					sem <- struct{}{} // Захватываем слот
+					go func(ip string) {
+						defer wg.Done()
+						defer func() { <-sem }() // Освобождаем слот
+
+						unreachable, err := pindHost(ip)
+						if err != nil {
+							fmt.Printf("Ошибка пинга для %s: %v\n", ip, err)
+						}
+						if unreachable {
+							mu.Lock()
+							listIp = append(listIp, ip)
+							mu.Unlock()
+						}
+					}(ipAddr)
+				}
+				wg.Wait()
+			} else {
+				fmt.Printf("  Нет доступных IP-адресов в подсети\n")
+			}
+
+			// Выводим список недоступных IP
+			if len(listIp) > 0 {
+				fmt.Printf("\nНедоступные IP-адреса в подсети %s:\n", network)
+				for i, ipAddr := range listIp {
+					fmt.Printf("  %d: %s\n", i+1, ipAddr)
+				}
+			} else {
+				fmt.Printf("\nВсе IP-адреса в подсети %s доступны\n", network)
+			}
+		}
+	}
+}

@@ -1,0 +1,114 @@
+package main
+
+import (
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"strings"
+)
+
+func printHelp() {
+	fmt.Println("Использование: ipscan <тип_сканирования> <диапазон_IP_или_список>")
+	fmt.Println("Типы сканирования:")
+	fmt.Println("  -sn <диапазон_IP> Пинг-сканирование, например: -sn 192.168.9.1-100")
+	fmt.Println("  -sn <список_IP> Пинг-сканирование, например: -sn 192.168.9.1,3,5,100")
+	fmt.Println("  -sp <диапазон_IP> Сканирование портов (TCP SYN), например: -sp 192.168.9.1-100")
+	fmt.Println("  -sp <список_IP> Сканирование портов, например: -sp 192.168.9.1,3,5,100")
+	fmt.Println("Дополнительно:")
+	fmt.Println("  /help Показать это сообщение")
+}
+
+func parseIPRange(input string) (string, error) {
+	// Диапазон (например, 192.168.9.1-100)
+	if strings.Contains(input, "-") {
+		parts := strings.Split(input, "-")
+		if len(parts) != 2 {
+			return "", fmt.Errorf("некорректный формат диапазона: %s", input)
+		}
+		startIP := parts[0]
+		if net.ParseIP(startIP) == nil {
+			return "", fmt.Errorf("некорректный IP-адрес: %s", startIP)
+		}
+		if _, err := strconv.Atoi(parts[1]); err != nil {
+			return "", fmt.Errorf("некорректный конечный октет: %s", parts[1])
+		}
+		return input, nil
+	}
+
+	// Список адресов (например, 192.168.9.1,3,5,100)
+	if strings.Contains(input, ",") {
+		parts := strings.Split(input, ",")
+		for i, part := range parts {
+			if i == 0 {
+				if net.ParseIP(part) == nil {
+					return "", fmt.Errorf("некорректный IP-адрес: %s", part)
+				}
+			} else {
+				if _, err := strconv.Atoi(part); err != nil {
+					return "", fmt.Errorf("некорректный октет: %s", part)
+				}
+			}
+		}
+		return input, nil
+	}
+
+	return "", fmt.Errorf("некорректный формат: укажите диапазон (x.x.x.x-y) или список (x.x.x.x,y,z)")
+}
+
+func scanWithNmap(scanType, target string) error {
+	// Карта для соответствия пользовательских типов сканирования и команд nmap
+	scanMap := map[string]string{
+		"-sn": "-sn", // Пинг-сканирование
+		"-sp": "-sS", // Сканирование портов (TCP SYN)
+	}
+
+	nmapType, ok := scanMap[scanType]
+	if !ok {
+		return fmt.Errorf("неподдерживаемый тип сканирования: %s", scanType)
+	}
+
+	// Формируем команду nmap
+	cmd := exec.Command("nmap", nmapType, target)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	fmt.Printf("Запуск сканирования: nmap %s %s\n", nmapType, target)
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("ошибка при выполнении nmap: %v", err)
+	}
+	return nil
+}
+
+func main() {
+	if len(os.Args) < 3 {
+		fmt.Println("Ошибка: укажите тип сканирования и диапазон IP или список адресов")
+		printHelp()
+		os.Exit(1)
+	}
+
+	// Проверяем, запрошена ли справка
+	if os.Args[1] == "/help" {
+		printHelp()
+		os.Exit(0)
+	}
+
+	// Получаем тип сканирования и диапазон/список
+	scanType := os.Args[1]
+	ipRange := os.Args[2]
+
+	// Валидируем диапазон или список
+	parsedRange, err := parseIPRange(ipRange)
+	if err != nil {
+		fmt.Printf("Ошибка: %v\n", err)
+		printHelp()
+		os.Exit(1)
+	}
+
+	// Выполняем сканирование
+	err = scanWithNmap(scanType, parsedRange)
+	if err != nil {
+		fmt.Printf("Ошибка сканирования: %v\n", err)
+		os.Exit(1)
+	}
+}
