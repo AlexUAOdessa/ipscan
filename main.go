@@ -2,145 +2,176 @@ package main
 
 import (
 	"fmt"
-	// "sync"
-	// "time"
+	"net"
 	"os"
-	// "github.com/tatsushid/go-fastping"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/tatsushid/go-fastping"
 )
-
-// func pindHost(ip string) (unreachable bool, err error) {
-// 	pinger := fastping.NewPinger()
-// 	ra, err := net.ResolveIPAddr("ip4:icmp", ip)
-// 	if err != nil {
-// 		fmt.Printf("Ошибка разрешения адреса для %s: %v\n", ip, err)
-// 		return true, err
-// 	}
-
-// 	pinger.AddIPAddr(ra)
-// 	received := false
-// 	pinger.OnRecv = func(addr *net.IPAddr, rtt time.Duration) {
-// 		received = true
-// 		fmt.Printf("Получен ответ от %s: время=%v\n", addr.String(), rtt)
-// 	}
-// 	pinger.OnIdle = func() {
-// 		// Пинг завершён
-// 	}
-
-// 	// Настройки пинга
-// 	pinger.MaxRTT = time.Second * 5 // Таймаут
-// 	pinger.Size = 64                // Размер пакета
-// 	// pinger.Count = 4                // Количество пакетов
-
-// 	// fmt.Printf("PING %s:\n", ip)
-// 	err = pinger.Run()
-// 	if err != nil {
-// 		fmt.Printf("Ошибка при выполнении пинга для %s: %v\n", ip, err)
-// 		return true, err
-// 	}
-
-// 	if !received {
-// 		return true, nil // Хост недоступен
-// 	}
-// 	return false, nil
-// }
-
-// func countIP(ipAddr net.IP, maskStr net.IPMask) (ip string, countIp int64, err error) {
-// 	// Получаем строковое представление IP
-// 	ip = ipAddr.String()
-
-// 	// Проверяем, что IP-адрес является IPv4
-// 	if ipAddr.To4() == nil {
-// 		return "", 0, fmt.Errorf("поддерживаются только IPv4-адреса")
-// 	}
-
-// 	// Получаем количество битов в маске
-// 	ones, _ := maskStr.Size()
-// 	if ones == 0 {
-// 		return "", 0, fmt.Errorf("некорректная маска подсети")
-// 	}
-
-// 	// Количество хостовых битов
-// 	hostBits := 32 - ones
-
-// 	// Количество IP-адресов
-// 	countIp = 1 << hostBits
-
-// 	// Для подсети отнимаем 2 адреса (сетевой и широковещательный), если это не /31 или /32
-// 	if hostBits > 1 {
-// 		countIp -= 2
-// 	}
-
-// 	return ip, countIp, nil
-// }
-
-// // generateIPs генерирует список IP-адресов в подсети
-// func generateIPs(networkIP net.IP, mask net.IPMask) ([]string, error) {
-// 	// Проверяем, что IP — IPv4
-// 	if networkIP.To4() == nil {
-// 		return nil, fmt.Errorf("поддерживаются только IPv4-адреса")
-// 	}
-
-// 	// Получаем количество битов в маске
-// 	ones, _ := mask.Size()
-// 	if ones == 0 {
-// 		return nil, fmt.Errorf("некорректная маска подсети")
-// 	}
-
-// 	// Количество хостовых битов
-// 	hostBits := 32 - ones
-// 	totalIPs := int64(1 << hostBits)
-
-// 	// Определяем диапазон адресов
-// 	var start, end int64
-// 	if hostBits <= 1 { // /31 или /32
-// 		start = 0
-// 		end = totalIPs
-// 	} else {
-// 		start = 1           // Пропускаем сетевой адрес
-// 		end = totalIPs - 1  // Пропускаем широковещательный адрес
-// 	}
-
-// 	// Генерируем IP-адреса
-// 	var ips []string
-// 	for i := start; i < end; i++ {
-// 		ipInt := ipToUint32(networkIP) + uint32(i)
-// 		newIP := uint32ToIP(ipInt)
-// 		ips = append(ips, newIP.String())
-// 	}
-
-// 	return ips, nil
-// }
-
-// // ipToUint32 преобразует net.IP (IPv4) в uint32
-// func ipToUint32(ip net.IP) uint32 {
-// 	ip = ip.To4()
-// 	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
-// }
-
-// // uint32ToIP преобразует uint32 в net.IP (IPv4)
-// func uint32ToIP(n uint32) net.IP {
-// 	return net.IP{
-// 		byte(n >> 24),
-// 		byte(n >> 16),
-// 		byte(n >> 8),
-// 		byte(n),
-// 	}
-// }
 
 func printHelp() {
 	fmt.Println("Использование: ipscan <тип_сканирования> <диапазон_IP_или_список>")
 	fmt.Println("Типы сканирования:")
-	fmt.Println("  -sn <диапазон_IP> Пинг-сканирование, например:   -sn 192.168.9.1-100")
-	fmt.Println("  -sn <список_IP>   Пинг-сканирование, например:   -sn 192.168.9.1,3,5,100")
-	fmt.Println("  -sp <диапазон_IP> Сканирование портов, например: -sp 192.168.9.1-100")
-	fmt.Println("  -sp <список_IP>   Сканирование портов, например: -sp 192.168.9.1,3,5,100")
+	fmt.Println("  -sn <диапазон_IP> Пинг-сканирование, например:   -sn 192.168.0.1-100")
+	fmt.Println("  -sn <список_IP>   Пинг-сканирование, например:   -sn 192.168.0.1,3,5,100")
+	fmt.Println("  -sp <диапазон_IP> Сканирование портов, например: -sp 192.168.0.1-100")
+	fmt.Println("  -sp <список_IP>   Сканирование портов, например: -sp 192.168.0.1,3,5,100")
 	fmt.Println("Дополнительно:")
 	fmt.Println("  /help Показать это сообщение")
 }
 
+func ParseArgs(arg []string) ([]string, error) {
+	var result []string
+
+	// Проверяем минимальное количество аргументов
+	if len(arg) < 3 {
+		return nil, fmt.Errorf("недостаточно аргументов: ожидается <программа> <тип_сканирования> <диапазон_или_список>")
+	}
+
+	// Проверяем тип сканирования
+	if arg[1] != "-sn" && arg[1] != "-sp" {
+		return nil, fmt.Errorf("неподдерживаемый тип сканирования: %s, ожидается -sn или -sp", arg[1])
+	}
+
+	// Проверяем, что аргумент для диапазона/списка не пустой
+	if arg[2] == "" {
+		return nil, fmt.Errorf("диапазон или список IP не указан")
+	}
+
+	// Удаляем пробелы из arg[2]
+	cleanedArg := strings.ReplaceAll(arg[2], " ", "")
+
+	// Проверяем, является ли аргумент диапазоном (содержит "-")
+	if strings.Contains(cleanedArg, "-") {
+		// Разделяем по "-"
+		rangeParts := strings.Split(cleanedArg, "-")
+		if len(rangeParts) != 2 {
+			return nil, fmt.Errorf("неверный формат диапазона: %s", cleanedArg)
+		}
+
+		// Извлекаем базовый IP и конечный октет
+		startParts := strings.Split(rangeParts[0], ".")
+		if len(startParts) != 4 {
+			return nil, fmt.Errorf("неверный формат начального IP: %s", rangeParts[0])
+		}
+
+		startOctet, err := strconv.Atoi(startParts[3])
+		if err != nil {
+			return nil, fmt.Errorf("неверный формат октета в начальном IP: %v", err)
+		}
+
+		endOctet, err := strconv.Atoi(rangeParts[1])
+		if err != nil {
+			return nil, fmt.Errorf("неверный формат конечного октета: %v", err)
+		}
+
+		if startOctet > endOctet || startOctet < 0 || endOctet > 255 {
+			return nil, fmt.Errorf("недопустимый диапазон октетов: %d-%d", startOctet, endOctet)
+		}
+
+		// Генерируем IP-адреса
+		baseIP := strings.Join(startParts[:3], ".") // Например, "192.168.0"
+		for i := startOctet; i <= endOctet; i++ {
+			result = append(result, fmt.Sprintf("%s.%d", baseIP, i))
+		}
+	} else {
+		// Обрабатываем список IP (например, "192.168.0.1,3,5,100")
+		parts := strings.Split(cleanedArg, ",")
+		if len(parts) < 1 {
+			return nil, fmt.Errorf("неверный формат списка IP: %s", cleanedArg)
+		}
+
+		// Проверяем, является ли первый элемент полным IP
+		firstParts := strings.Split(parts[0], ".")
+		if len(firstParts) != 4 {
+			return nil, fmt.Errorf("неверный формат первого IP в списке: %s", parts[0])
+		}
+
+		baseIP := strings.Join(firstParts[:3], ".") // Например, "192.168.0"
+		for _, part := range parts {
+			var octet int
+			var fullIP string
+			if strings.Contains(part, ".") {
+				// Полный IP-адрес
+				fullIP = part
+			} else {
+				// Только октет
+				var err error
+				octet, err = strconv.Atoi(part)
+				if err != nil {
+					return nil, fmt.Errorf("неверный формат октета в списке: %s", part)
+				}
+				fullIP = fmt.Sprintf("%s.%d", baseIP, octet)
+			}
+
+			// Проверяем валидность IP
+			if !isValidIP(fullIP) {
+				return nil, fmt.Errorf("недопустимый IP-адрес: %s", fullIP)
+			}
+			result = append(result, fullIP)
+		}
+	}
+
+	return result, nil
+}
+
+// isValidIP проверяет, является ли строка валидным IPv4-адресом
+func isValidIP(ip string) bool {
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, part := range parts {
+		num, err := strconv.Atoi(part)
+		if err != nil || num < 0 || num > 255 {
+			return false
+		}
+	}
+	return true
+}
+
+func pingHost(ip string) (unreachable bool, err error) {
+	pinger := fastping.NewPinger()
+	ra, err := net.ResolveIPAddr("ip4:icmp", ip)
+	if err != nil {
+		fmt.Printf("Ошибка разрешения адреса для %s: %v\n", ip, err)
+		return true, err
+	}
+
+	pinger.AddIPAddr(ra)
+	received := false
+	pinger.OnRecv = func(addr *net.IPAddr, rtt time.Duration) {
+		received = true
+		fmt.Printf("Получен ответ от %s: время=%v\n", addr.String(), rtt)
+	}
+	pinger.OnIdle = func() {
+		// Пинг завершён
+	}
+
+	// Настройки пинга
+	pinger.MaxRTT = time.Second * 5 // Таймаут
+	pinger.Size = 64                // Размер пакета
+	// pinger.Count = 4                // Количество пакетов
+
+	// fmt.Printf("PING %s:\n", ip)
+	err = pinger.Run()
+	if err != nil {
+		fmt.Printf("Ошибка при выполнении пинга для %s: %v\n", ip, err)
+		return true, err
+	}
+
+	if !received {
+		return true, nil // Хост недоступен
+	}
+	return false, nil
+}
+
 func main() {
-if len(os.Args) < 2 {
-		fmt.Println("Ошибка: укажите диапазон IP или список адресов")
+	// Проверяем минимальное количество аргументов
+	if len(os.Args) < 2 {
+		fmt.Println("Ошибка: укажите тип сканирования и диапазон IP или список адресов")
 		printHelp()
 		os.Exit(1)
 	}
@@ -151,9 +182,30 @@ if len(os.Args) < 2 {
 		os.Exit(0)
 	}
 
-	// Получаем аргумент с IP-диапазоном или списком
-	if os.Args[1] != "" && os.Args[2] != ""{
-		ipRange := os.Args[1] + " " + os.Args[2]
-	    fmt.Println(ipRange)
+	// Парсим аргументы
+	ips, err := ParseArgs(os.Args)
+	if err != nil {
+		fmt.Printf("Ошибка: %v\n", err)
+		printHelp()
+		os.Exit(1)
+	}
+
+	// Выводим результат для демонстрации
+	// fmt.Println("Список IP-адресов для сканирования:")
+	// for _, ip := range ips {
+	// 	fmt.Println(ip)
+	// }
+
+	for _, ip := range ips {
+		unreachable, err := pingHost(ip)
+		if err != nil {
+			fmt.Printf("Ошибка пинга %s: %v\n", ip, err)
+			continue
+		}
+		if unreachable {
+			fmt.Printf("%s: хост недоступен\n", ip)
+		} else {
+			fmt.Printf("%s: хост доступен\n", ip)
+		}
 	}
 }
