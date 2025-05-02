@@ -119,17 +119,19 @@ func isValidIP(ip string) bool {
 }
 
 // pingHost выполняет ICMP-пинг для указанного IP-адреса.
-func pingHost(ip string) (unreachable bool, err error) {
+func pingHost(ip string) (unreachable bool, receivedHost string, err error) {
 	pinger := fastping.NewPinger()
 	ra, err := net.ResolveIPAddr("ip4:icmp", ip)
 	if err != nil {
 		fmt.Printf("Ошибка разрешения адреса для %s: %v\n", ip, err)
-		return true, err
+		return true, "", err
 	}
 	pinger.AddIPAddr(ra)
 	received := false
-	pinger.OnRecv = func(addr *net.IPAddr, rtt time.Duration) {
+	var rtt time.Duration
+	pinger.OnRecv = func(addr *net.IPAddr, duration time.Duration) {
 		received = true
+		rtt = duration
 		fmt.Printf("Получен ответ от %s: время=%v\n", addr.String(), rtt)
 	}
 	pinger.OnIdle = func() {}
@@ -137,9 +139,12 @@ func pingHost(ip string) (unreachable bool, err error) {
 	pinger.Size = 64
 	if err := pinger.Run(); err != nil {
 		fmt.Printf("Ошибка при выполнении пинга для %s: %v\n", ip, err)
-		return true, err
+		return true, "", err
 	}
-	return !received, nil
+	if received {
+		return false, ip, nil
+	}
+	return true, "", nil
 }
 
 func main() {
@@ -167,15 +172,15 @@ func main() {
 		wg.Add(1)
 		go func(ip string) {
 			defer wg.Done()
-			unreachable, err := pingHost(ip)
+			unreachable, receivedHost, err := pingHost(ip)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				fmt.Printf("Ошибка пинга %s: %v\n", ip, err)
+				// Ошибка уже выведена в pingHost
 				return
 			}
 			if !unreachable {
-				listHost = append(listHost, ip)
+				listHost = append(listHost, receivedHost)
 			}
 		}(ip)
 	}
