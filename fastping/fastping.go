@@ -36,7 +36,6 @@
 package fastping
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -78,6 +77,7 @@ type Pinger struct {
 	OnRecv  func(*net.IPAddr, time.Duration)
 	OnIdle  func()
 	Debug   bool
+	rand    *rand.Rand // Локальный генератор случайных чисел
 }
 
 // packet содержит данные пакета и адрес.
@@ -103,21 +103,51 @@ func newContext() *context {
 
 // NewPinger создаёт новый экземпляр Pinger.
 func NewPinger() *Pinger {
-	rand.Seed(time.Now().UnixNano())
+	// Создаем локальный генератор случайных чисел с seed на основе времени
+	src := rand.NewSource(time.Now().UnixNano())
+	r := rand.New(src)
+
 	return &Pinger{
-		id:      rand.Intn(0xffff),
-		seq:     rand.Intn(0xffff),
+		id:      r.Intn(0xffff), // Используем локальный rand для id
+		seq:     r.Intn(0xffff), // Используем локальный rand для seq
 		addrs:   make(map[string]*net.IPAddr),
 		network: "ip",
 		source:  "",
 		source6: "",
 		Size:    TimeSliceLength,
 		MaxRTT:  time.Second,
+		rand:    r, // Сохраняем генератор для повторного использования
 	}
 }
 
-// TCPPing выполняет TCP-пинг к указанному адресу с таймаутом.
-func (p *Pinger) TCPPing(addr string, timeout time.Duration) error {
+// TCPPing выполняет TCP-пинг к указанному хосту и порту с таймаутом.
+func (p *Pinger) TCPPing(host string, port int, timeout time.Duration) error {
+	// Валидация порта, установка 80 по умолчанию, если порт некорректен
+	if port <= 0 || port > 65535 {
+		port = 80
+	}
+
+	// Разрешение хоста в IP-адрес
+	ipAddr, err := net.ResolveIPAddr("ip", host)
+	if err != nil {
+		return fmt.Errorf("не удалось разрешить хост %s: %v", host, err)
+	}
+
+	// Форматирование адреса в зависимости от версии IP
+	var addr string
+	if isIPv6(ipAddr.IP) {
+		// Для IPv6 используем формат [ip]:port, включаем зону, если она есть
+		if ipAddr.Zone != "" {
+			addr = fmt.Sprintf("[%s%%%s]:%d", ipAddr.IP.String(), ipAddr.Zone, port)
+		} else {
+			addr = fmt.Sprintf("[%s]:%d", ipAddr.IP.String(), port)
+		}
+	} else {
+		// Для IPv4 используем формат ip:port
+		addr = fmt.Sprintf("%s:%d", ipAddr.IP.String(), port)
+	}
+
+	// Выполнение TCP-соединения с таймаутом
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return fmt.Errorf("TCP-пинг к %s не удался: %v", addr, err)
@@ -213,30 +243,6 @@ func (p *Pinger) RemoveIPAddr(ip *net.IPAddr) {
 	delete(p.addrs, ip.String())
 }
 
-// AddHandler добавляет обработчик событий (устарело).
-func (p *Pinger) AddHandler(event string, handler interface{}) error {
-	switch event {
-	case "receive":
-		if hdl, ok := handler.(func(*net.IPAddr, time.Duration)); ok {
-			p.mu.Lock()
-			p.OnRecv = hdl
-			p.mu.Unlock()
-			return nil
-		}
-		return errors.New("обработчик receive должен быть `func(*net.IPAddr, time.Duration)`")
-	case "idle":
-		if hdl, ok := handler.(func()); ok {
-			p.mu.Lock()
-			p.OnIdle = hdl
-			p.mu.Unlock()
-			return nil
-		}
-		return errors.New("обработчик idle должен быть `func()`")
-	default:
-		return fmt.Errorf("событие %s не поддерживается", event)
-	}
-}
-
 // Run выполняет единичный ICMP-пинг.
 func (p *Pinger) Run() error {
 	p.mu.Lock()
@@ -328,7 +334,7 @@ func (p *Pinger) run(once bool) {
 		case <-recvCtx.done:
 			p.debugln("Run: <-recvCtx.done")
 			p.mu.Lock()
-			err = recvCtx.err
+			// err = recvCtx.err
 			p.mu.Unlock()
 			return
 		case <-ticker.C:
@@ -354,8 +360,8 @@ func (p *Pinger) run(once bool) {
 func (p *Pinger) sendICMP(conn, conn6 *icmp.PacketConn) (map[string]*net.IPAddr, error) {
 	p.debugln("sendICMP: Начало")
 	p.mu.Lock()
-	p.id = rand.Intn(0xffff)
-	p.seq = rand.Intn(0xffff)
+	p.id = p.rand.Intn(0xffff) // Используем локальный rand для id
+	p.seq = p.rand.Intn(0xffff) // Используем локальный rand для seq
 	p.mu.Unlock()
 	queue := make(map[string]*net.IPAddr)
 	wg := new(sync.WaitGroup)
@@ -510,6 +516,7 @@ func (p *Pinger) procRecv(recv *packet, queue map[string]*net.IPAddr) {
 	}
 }
 
+// cSpell:ignore debugln
 // debugln выводит отладочные сообщения, если Debug=true.
 func (p *Pinger) debugln(args ...interface{}) {
 	if p.Debug {
