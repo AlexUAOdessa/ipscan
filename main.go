@@ -120,6 +120,7 @@ func isValidIP(ip string) bool {
 
 // pingHost выполняет ICMP-пинг для указанного IP-адреса.
 func pingHost(ip string) (unreachable bool, receivedHost string, err error) {
+	var receivedIP string
 	pinger := fastping.NewPinger()
 	ra, err := net.ResolveIPAddr("ip4:icmp", ip)
 	if err != nil {
@@ -132,19 +133,20 @@ func pingHost(ip string) (unreachable bool, receivedHost string, err error) {
 	pinger.OnRecv = func(addr *net.IPAddr, duration time.Duration) {
 		received = true
 		rtt = duration
-		fmt.Printf("Получен ответ от %s: время=%v\n", addr.String(), rtt)
+		receivedIP = fmt.Sprintf("Получен ответ от %s: время=%v", addr.String(), rtt)
 	}
 	pinger.OnIdle = func() {}
 	pinger.MaxRTT = 5 * time.Second
 	pinger.Size = 64
 	if err := pinger.Run(); err != nil {
-		fmt.Printf("Ошибка при выполнении пинга для %s: %v\n", ip, err)
-		return true, "", err
+		receivedIP = fmt.Sprintf("Ошибка при выполнении пинга для %s: %v", ip, err)
+		return true, receivedIP, err
 	}
 	if received {
-		return false, ip, nil
+		// return false, ip, nil
+		return false, receivedIP, nil
 	}
-	return true, "", nil
+	return true, receivedIP, nil
 }
 
 func main() {
@@ -186,22 +188,37 @@ func main() {
 	}
 	wg.Wait()
 
-	// Сортировка доступных хостов по числовым октетам
-	sort.Slice(listHost, func(i, j int) bool {
-		ip1Parts := strings.Split(listHost[i], ".")
-		ip2Parts := strings.Split(listHost[j], ".")
-		for k := 0; k < 4; k++ {
-			num1, _ := strconv.Atoi(ip1Parts[k])
-			num2, _ := strconv.Atoi(ip2Parts[k])
-			if num1 != num2 {
-				return num1 < num2
-			}
-		}
-		return false
-	})
+    // Сортировка доступных хостов по числовым октетам IP-адреса
+    sort.Slice(listHost, func(i, j int) bool {
+        // Извлекаем IP-адрес из строки вида "Получен ответ от <IP>: время=<время>ms"
+        getIP := func(s string) string {
+            parts := strings.Split(s, " ")
+            if len(parts) >= 4 {
+                return strings.Split(parts[3], ":")[0] // Извлекаем IP из "192.168.9.135: время=..."
+            }
+            return ""
+        }
+        ip1 := getIP(listHost[i])
+        ip2 := getIP(listHost[j])
+    
+        // Разделяем IP-адреса на октеты
+        ip1Parts := strings.Split(ip1, ".")
+        ip2Parts := strings.Split(ip2, ".")
+    
+        // Сравниваем октеты
+        for k := 0; k < 4; k++ {
+            num1, _ := strconv.Atoi(ip1Parts[k])
+            num2, _ := strconv.Atoi(ip2Parts[k])
+            if num1 != num2 {
+                return num1 < num2
+            }
+        }
+        return false
+    })
 
 	// Вывод отсортированного списка доступных хостов
 	for _, host := range listHost {
-		fmt.Printf("%s: хост доступен\n", host)
+		// fmt.Printf("%s: хост доступен\n", host)
+		fmt.Println(host)
 	}
 }
