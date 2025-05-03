@@ -21,16 +21,18 @@ func printHelp() {
 	fmt.Printf("************ Программа разработана @Alex версия 0.1 ************\n\n")
 	fmt.Printf("Использование: ipscan <тип_сканирования> <диапазон_IP_или_список>\n\n")
 	fmt.Println("Типы сканирования:")
-	fmt.Println("  -sn <диапазон_IP> Пинг-сканирование")
-	fmt.Println("  -sn <список_IP>   Пинг-сканирование")
+	fmt.Println("  -sl <диапазон_IP> Пинг-сканирование")
+	fmt.Println("  -sl <список_IP>   Пинг-сканирование")
+	fmt.Println("  -sn <диапазон_IP> Пинг-сканирование с возвратом ИМЕНИ host")
+	fmt.Println("  -sn <список_IP>   Пинг-сканирование с возвратом ИМЕНИ host")
 	fmt.Println("  -sh <диапазон_IP> HTTP-пинг (TCP-пинг на порт 80)")
 	fmt.Println("  -sh <список_IP>   HTTP-пинг (TCP-пинг на порт 80)")
 	fmt.Println("  -su <диапазон_IP> UDP-пинг")
 	fmt.Println("  -su <список_IP>   UDP-пинг")
 	fmt.Println("  -sp <диапазон_IP> Сканирование портов")
 	fmt.Println("  -sp <список_IP>   Сканирование портов")
-	fmt.Println("      <диапазон_IP> Например: -sn 192.168.0.1-100")
-	fmt.Printf("      <список_IP>   Например: -sn 192.168.0.1,3,5,100\n\n")
+	fmt.Println("      <диапазон_IP> Например: -sl 192.168.0.1-100")
+	fmt.Printf("      <список_IP>   Например: -sl 192.168.0.1,3,5,100\n\n")
 	fmt.Println("Дополнительно:")
 	fmt.Println("  /help Показать это сообщение")
 }
@@ -40,8 +42,8 @@ func ParseArgs(args []string) (string, []string, error) {
 	if len(args) < 3 {
 		return "", nil, fmt.Errorf("недостаточно аргументов: ожидается <программа> <тип_сканирования> <диапазон_или_список>")
 	}
-	if args[1] != "-sn" && args[1] != "-sh" && args[1] != "-sp" && args[1] != "-su"{
-		return "", nil, fmt.Errorf("неподдерживаемый тип сканирования: %s, ожидается -sn, -sh или -sp", args[1])
+	if args[1] != "-sl" && args[1] != "-sh" && args[1] != "-sp" && args[1] != "-su" && args[1] != "-sn"{
+		return "", nil, fmt.Errorf("неподдерживаемый тип сканирования: %s, ожидается -sl, -sh или -sp", args[1])
 	}
 	if args[2] == "" {
 		return "", nil, fmt.Errorf("диапазон или список IP не указан")
@@ -165,6 +167,18 @@ func pingHostHTTP(ip string) (unreachable bool, receivedHost string, err error) 
 	return false, receivedHost, nil
 }
 
+// pingHostName выполняет пинг с возвратом имени хоста для указанного IP-адреса.
+func pingHostName(ip string) (unreachable bool, receivedHost string, err error) {
+	pinger := fastping.NewPinger()
+	name, err := pinger.NamePing(ip,  5*time.Second)
+	if err != nil {
+		receivedHost = fmt.Sprintf("Ошибка при выполнении Name-пинга для %s", ip)
+		return true, ip , err
+	}
+	receivedHost = fmt.Sprintf("Получен ответ от %s ИМЯ хоста %s", ip, name)
+	return false, receivedHost, nil
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Ошибка: укажите тип сканирования и диапазон IP или список адресов")
@@ -193,13 +207,15 @@ func main() {
 			var unreachable bool
 			var receivedHost string
 			var err error
-			if key == "-sn" {
+			if key == "-sl" {
 				unreachable, receivedHost, err = pingHost(ip, key)
 			} else if key == "-su" {
 				unreachable, receivedHost, err = pingHost(ip, key)
 			} else if key == "-sh" {
 				unreachable, receivedHost, err = pingHostHTTP(ip)
-			}else {
+			} else if key == "-sn" {
+				unreachable, receivedHost, err = pingHostName(ip)
+			} else {
 				// Для -sp (сканирование портов) пока не реализовано
 				return
 			}
@@ -245,8 +261,10 @@ func main() {
 	})
 
 	switch key {
-	case "-sn":
+	case "-sl":
 		fmt.Println("ICMP ping")
+	case "-sn":
+		fmt.Println("Name ping")
 	case "-sh":
 		fmt.Println("HTTP ping")
 	case "-su":

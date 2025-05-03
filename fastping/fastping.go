@@ -36,6 +36,7 @@
 package fastping
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math/rand"
@@ -70,7 +71,7 @@ type Pinger struct {
 	source6 string
 	hasIPv4 bool
 	hasIPv6 bool
-	ctx     *context
+	ctx     *pingContext
 	mu      sync.Mutex
 	Size    int
 	MaxRTT  time.Duration
@@ -86,16 +87,16 @@ type packet struct {
 	addr  net.Addr
 }
 
-// context управляет состоянием выполнения.
-type context struct {
+// pingContext управляет состоянием выполнения.
+type pingContext struct {
 	stop chan bool
 	done chan bool
 	err  error
 }
 
 // newContext создаёт новый контекст.
-func newContext() *context {
-	return &context{
+func newContext() *pingContext {
+	return &pingContext{
 		stop: make(chan bool),
 		done: make(chan bool),
 	}
@@ -166,6 +167,32 @@ func (p *Pinger) Network(network string) (string, error) {
 		return origNet, fmt.Errorf("%s не является допустимой конечной точкой ICMP", network)
 	}
 	return origNet, nil
+}
+
+// NamePing выполняет обратный DNS-запрос для получения имени хоста по IP-адресу.
+func (p *Pinger) NamePing(host string, timeout time.Duration) (string, error) {
+	// Разрешение хоста в IP-адрес
+	ipAddr, err := net.ResolveIPAddr("ip", host)
+	if err != nil {
+		return "", fmt.Errorf("не удалось разрешить хост %s: %v", host, err)
+	}
+
+	// Установка контекста с таймаутом для DNS-запроса
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// Выполнение обратного DNS-запроса
+	names, err := net.DefaultResolver.LookupAddr(ctx, ipAddr.IP.String())
+	if err != nil {
+		return "", fmt.Errorf("обратный DNS-запрос к %s не удался: %v", ipAddr.IP.String(), err)
+	}
+
+	// Возвращаем первое имя хоста, если оно есть
+	if len(names) == 0 {
+		return "", fmt.Errorf("не найдено имён хоста для %s", ipAddr.IP.String())
+	}
+
+	return names[0], nil
 }
 
 // Source задаёт источник IPv4/IPv6 для ICMP-пакетов.
@@ -424,7 +451,7 @@ func (p *Pinger) sendICMP(conn, conn6 *icmp.PacketConn) (map[string]*net.IPAddr,
 }
 
 // recvICMP получает ICMP-пакеты.
-func (p *Pinger) recvICMP(conn *icmp.PacketConn, recv chan<- *packet, ctx *context, wg *sync.WaitGroup) {
+func (p *Pinger) recvICMP(conn *icmp.PacketConn, recv chan<- *packet, ctx *pingContext, wg *sync.WaitGroup) {
 	defer wg.Done()
 	p.debugln("recvICMP: Начало")
 	for {
