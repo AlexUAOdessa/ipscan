@@ -19,7 +19,7 @@ const MaxGoroutines = 50
 
 // printHelp выводит справку по использованию программы.
 func printHelp() {
-	fmt.Printf("************ Программа разработана @Alex версия 0.7 ************\n\n")
+	fmt.Printf("************ Программа разработана @Alex версия 0.8 ************\n\n")
 	fmt.Printf("Использование: ipscan <тип_сканирования> <диапазон_IP_или_список>[:порты]\n\n")
 	fmt.Println("Типы сканирования:")
 	fmt.Println("  -sl <диапазон_IP> Пинг-сканирование (ICMP)")
@@ -373,7 +373,7 @@ func pingHostUDP(ip string, ports []int) (unreachable bool, receivedHosts []stri
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				// Если таймаут, предполагаем, что порт открыт
-				results = append(results, fmt.Sprintf("Получен ответ от %s:%d: порт открыт", ip, port))
+				results = append(results, fmt.Sprintf("Получен ответ от %s:%d: порт открыт (нет ICMP Port Unreachable)", ip, port))
 				unreachable = false
 			} else if strings.Contains(err.Error(), "port unreachable") {
 				results = append(results, fmt.Sprintf("Порт %d закрыт на %s: ICMP Port Unreachable", port, ip))
@@ -403,7 +403,7 @@ func pingHostTCP(ip string, ports []int) (unreachable bool, receivedHosts []stri
 		addr := fmt.Sprintf("%s:%d", ip, port)
 		conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 		if err != nil {
-			// results = append(results, fmt.Sprintf("Порт %d закрыт на %s: %v", port, ip, err))
+			results = append(results, fmt.Sprintf("Порт %d закрыт на %s: %v", port, ip, err))
 			continue
 		}
 		defer conn.Close()
@@ -416,6 +416,16 @@ func pingHostTCP(ip string, ports []int) (unreachable bool, receivedHosts []stri
 	}
 
 	return unreachable, results, nil
+}
+
+// extractIP извлекает IP-адрес из строки результата.
+func extractIP(s string) string {
+	re := regexp.MustCompile(`(\d+\.\d+\.\d+\.\d+)`)
+	matches := re.FindStringSubmatch(s)
+	if len(matches) >= 2 {
+		return matches[1]
+	}
+	return ""
 }
 
 func main() {
@@ -537,44 +547,76 @@ func main() {
 	}
 	wg.Wait()
 
-	// Сортировка доступных хостов по IP и портам
-	// Фильтруем только строки с открытыми портами
-	var openHosts []string
-	for _, host := range listHost {
-		if strings.Contains(host, ": порт открыт") {
-			openHosts = append(openHosts, host)
+	// Сортировка доступных хостов
+	if key == "-sl" || key == "-sn" || key == "-sh" || (key == "-su" && len(ports) == 0) {
+		// Сортировка по IP для -sl, -sn, -sh и -su (без портов)
+		sort.Slice(listHost, func(i, j int) bool {
+			ip1 := extractIP(listHost[i])
+			ip2 := extractIP(listHost[j])
+
+			// Сравниваем IP-адреса
+			ip1Parts := strings.Split(ip1, ".")
+			ip2Parts := strings.Split(ip2, ".")
+			for k := 0; k < 4; k++ {
+				num1, _ := strconv.Atoi(ip1Parts[k])
+				num2, _ := strconv.Atoi(ip2Parts[k])
+				if num1 != num2 {
+					return num1 < num2
+				}
+			}
+			return false
+		})
+	} else {
+		// Сортировка по IP и портам для -sp и -su (с портами)
+		var openHosts []string
+		for _, host := range listHost {
+			if strings.Contains(host, ": порт открыт") {
+				openHosts = append(openHosts, host)
+			}
 		}
+
+		sort.Slice(openHosts, func(i, j int) bool {
+			getIPAndPort := func(s string) (string, int) {
+				// Используем регулярное выражение для извлечения IP и порта
+				re := regexp.MustCompile(`(\d+\.\d+\.\d+\.\d+):(\d+)`)
+				matches := re.FindStringSubmatch(s)
+				if len(matches) >= 3 {
+					ip := matches[1]
+					port, _ := strconv.Atoi(matches[2])
+					return ip, port
+				}
+				// Если формат не соответствует, возвращаем пустой IP и порт 0
+				return "", 0
+			}
+			ip1, port1 := getIPAndPort(openHosts[i])
+			ip2, port2 := getIPAndPort(openHosts[j])
+
+			// Сравниваем IP-адреса
+			ip1Parts := strings.Split(ip1, ".")
+			ip2Parts := strings.Split(ip2, ".")
+			for k := 0; k < 4; k++ {
+				num1, _ := strconv.Atoi(ip1Parts[k])
+				num2, _ := strconv.Atoi(ip2Parts[k])
+				if num1 != num2 {
+					return num1 < num2
+				}
+			}
+			// Если IP одинаковые, сравниваем порты
+			return port1 < port2
+		})
+
+		// Обновляем listHost, чтобы открытые порты были отсортированы, а закрытые остались в порядке добавления
+		listHost = append(openHosts, listHost...)
+		seen := make(map[string]bool)
+		var uniqueListHost []string
+		for _, host := range listHost {
+			if !seen[host] {
+				seen[host] = true
+				uniqueListHost = append(uniqueListHost, host)
+			}
+		}
+		listHost = uniqueListHost
 	}
-
-	sort.Slice(openHosts, func(i, j int) bool {
-		getIPAndPort := func(s string) (string, int) {
-			// Используем регулярное выражение для извлечения IP и порта
-			re := regexp.MustCompile(`(\d+\.\d+\.\d+\.\d+):(\d+)`)
-			matches := re.FindStringSubmatch(s)
-			if len(matches) >= 3 {
-				ip := matches[1]
-				port, _ := strconv.Atoi(matches[2])
-				return ip, port
-			}
-			// Если формат не соответствует, возвращаем пустой IP и порт 0
-			return "", 0
-		}
-		ip1, port1 := getIPAndPort(openHosts[i])
-		ip2, port2 := getIPAndPort(openHosts[j])
-
-		// Сравниваем IP-адреса
-		ip1Parts := strings.Split(ip1, ".")
-		ip2Parts := strings.Split(ip2, ".")
-		for k := 0; k < 4; k++ {
-			num1, _ := strconv.Atoi(ip1Parts[k])
-			num2, _ := strconv.Atoi(ip2Parts[k])
-			if num1 != num2 {
-				return num1 < num2
-			}
-		}
-		// Если IP одинаковые, сравниваем порты
-		return port1 < port2
-	})
 
 	switch key {
 	case "-sl":
