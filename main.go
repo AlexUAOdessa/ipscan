@@ -373,7 +373,7 @@ func pingHostUDP(ip string, ports []int) (unreachable bool, receivedHosts []stri
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				// Если таймаут, предполагаем, что порт открыт
-				results = append(results, fmt.Sprintf("Получен ответ от %s:%d: порт открыт (нет ICMP Port Unreachable)", ip, port))
+				results = append(results, fmt.Sprintf("Получен ответ от %s:%d: порт открыт", ip, port))
 				unreachable = false
 			} else if strings.Contains(err.Error(), "port unreachable") {
 				results = append(results, fmt.Sprintf("Порт %d закрыт на %s: ICMP Port Unreachable", port, ip))
