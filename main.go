@@ -373,10 +373,10 @@ func pingHostUDP(ip string, ports []int) (unreachable bool, receivedHosts []stri
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				// Если таймаут, предполагаем, что порт открыт
-				results = append(results, fmt.Sprintf("Получен ответ от %s:%d: порт открыт (нет ICMP Port Unreachable)", ip, port))
+				results = append(results, fmt.Sprintf("Получен ответ от %s:%d: порт открыт", ip, port))
 				unreachable = false
 			} else if strings.Contains(err.Error(), "port unreachable") {
-				results = append(results, fmt.Sprintf("Порт %d закрыт на %s: ICMP Port Unreachable", port, ip))
+				// results = append(results, fmt.Sprintf("Порт %d закрыт на %s: ICMP Port Unreachable", port, ip))
 			} else {
 				results = append(results, fmt.Sprintf("Ошибка при чтении ответа от %s:%d: %v", ip, port, err))
 			}
@@ -403,7 +403,7 @@ func pingHostTCP(ip string, ports []int) (unreachable bool, receivedHosts []stri
 		addr := fmt.Sprintf("%s:%d", ip, port)
 		conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 		if err != nil {
-			results = append(results, fmt.Sprintf("Порт %d закрыт на %s: %v", port, ip, err))
+			// results = append(results, fmt.Sprintf("Порт %d закрыт на %s: %v", port, ip, err))
 			continue
 		}
 		defer conn.Close()
@@ -548,7 +548,7 @@ func main() {
 	wg.Wait()
 
 	// Сортировка доступных хостов
-	if key == "-sl" || key == "-sn" || key == "-sh" || (key == "-su" && len(ports) == 0) {
+	if key == "-sl" || key == "-sn" || key == "-sh" || (key == "-su" && len(ports) == 0) || (key == "-sp" && len(ports) == 0){
 		// Сортировка по IP для -sl, -sn, -sh и -su (без портов)
 		sort.Slice(listHost, func(i, j int) bool {
 			ip1 := extractIP(listHost[i])
