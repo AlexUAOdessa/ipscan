@@ -19,7 +19,7 @@ const MaxGoroutines = 50
 
 // printHelp выводит справку по использованию программы.
 func printHelp() {
-	fmt.Printf("************ Программа разработана @Alex версия 0.8 ************\n\n")
+	fmt.Printf("************ Программа разработана @Alex версия 0.9 ************\n\n")
 	fmt.Printf("Использование: ipscan <тип_сканирования> <диапазон_IP_или_список>[:порты]\n\n")
 	fmt.Println("Типы сканирования:")
 	fmt.Println("  -sl <диапазон_IP> Пинг-сканирование (ICMP)")
@@ -87,7 +87,6 @@ func ipRangeToIPs(startIP, endIP string) ([]string, error) {
 	var ips []string
 	for ip := start; !ipAfter(ip, end); ip = append(net.IP(nil), ip...) {
 		ips = append(ips, ip.String())
-		incIP(ip)
 	}
 	// Добавляем конечный IP только если он ещё не включён
 	if ip := net.ParseIP(end.String()); ipAfter(ip, start) || ip.Equal(start) {
@@ -306,7 +305,7 @@ func pingHost(ip string, key string) (unreachable bool, receivedHost string, err
 	pinger.OnRecv = func(addr *net.IPAddr, duration time.Duration) {
 		received = true
 		rtt = duration
-		receivedIP = fmt.Sprintf("Получен ответ от %s: время=%v", addr.String(), rtt)
+		receivedIP = fmt.Sprintf("Получен ответ от %-15s: время=%v", addr.String(), rtt)
 	}
 	pinger.OnIdle = func() {}
 	pinger.MaxRTT = 5 * time.Second
@@ -329,7 +328,7 @@ func pingHostHTTP(ip string) (unreachable bool, receivedHost string, err error) 
 		receivedHost = fmt.Sprintf("Ошибка при выполнении HTTP-пинга для %s: %v", ip, err)
 		return true, receivedHost, err
 	}
-	receivedHost = fmt.Sprintf("Получен ответ от %s: порт 80 открыт", ip)
+	receivedHost = fmt.Sprintf("Получен ответ от %-15s: порт 80 открыт", ip)
 	return false, receivedHost, nil
 }
 
@@ -341,7 +340,7 @@ func pingHostName(ip string) (unreachable bool, receivedHost string, err error) 
 		receivedHost = fmt.Sprintf("Ошибка при выполнении Name-пинга для %s", ip)
 		return true, ip, err
 	}
-	receivedHost = fmt.Sprintf("Получен ответ от %s ИМЯ хоста %s", ip, name)
+	receivedHost = fmt.Sprintf("Получен ответ от %-15s ИМЯ хоста %s", ip, name)
 	return false, receivedHost, nil
 }
 
@@ -373,7 +372,7 @@ func pingHostUDP(ip string, ports []int) (unreachable bool, receivedHosts []stri
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				// Если таймаут, предполагаем, что порт открыт
-				results = append(results, fmt.Sprintf("Получен ответ от %s:%d: порт открыт", ip, port))
+				results = append(results, fmt.Sprintf("Получен ответ от %-15s:%-5d: порт открыт", ip, port))
 				unreachable = false
 			} else if strings.Contains(err.Error(), "port unreachable") {
 				// results = append(results, fmt.Sprintf("Порт %d закрыт на %s: ICMP Port Unreachable", port, ip))
@@ -383,7 +382,7 @@ func pingHostUDP(ip string, ports []int) (unreachable bool, receivedHosts []stri
 			continue
 		}
 
-		results = append(results, fmt.Sprintf("Получен ответ от %s:%d: порт открыт", ip, port))
+		results = append(results, fmt.Sprintf("Получен ответ от %-15s:%-5d: порт открыт", ip, port))
 		unreachable = false
 	}
 
@@ -407,11 +406,11 @@ func pingHostTCP(ip string, ports []int) (unreachable bool, receivedHosts []stri
 			continue
 		}
 		defer conn.Close()
-		results = append(results, fmt.Sprintf("Получен ответ от %s:%d: порт открыт", ip, port))
+		results = append(results, fmt.Sprintf("Получен ответ от %-15s:%-5d: порт открыт", ip, port))
 		unreachable = false
 	}
 
-	if len(results) == 0 {
+	if len(results) ==0 {
 		return true, nil, fmt.Errorf("нет результатов для %s", ip)
 	}
 
@@ -548,7 +547,7 @@ func main() {
 	wg.Wait()
 
 	// Сортировка доступных хостов
-	if key == "-sl" || key == "-sn" || key == "-sh" || (key == "-su" && len(ports) == 0) || (key == "-sp" && len(ports) == 0){
+	if key == "-sl" || key == "-sn" || key == "-sh" || (key == "-su" && len(ports) == 0) || (key == "-sp" && len(ports) == 0) {
 		// Сортировка по IP для -sl, -sn, -sh и -su (без портов)
 		sort.Slice(listHost, func(i, j int) bool {
 			ip1 := extractIP(listHost[i])
@@ -577,45 +576,40 @@ func main() {
 
 		sort.Slice(openHosts, func(i, j int) bool {
 			getIPAndPort := func(s string) (string, int) {
-				// Используем регулярное выражение для извлечения IP и порта
 				re := regexp.MustCompile(`(\d+\.\d+\.\d+\.\d+):(\d+)`)
 				matches := re.FindStringSubmatch(s)
-				if len(matches) >= 3 {
-					ip := matches[1]
-					port, _ := strconv.Atoi(matches[2])
-					return ip, port
+				if len(matches) < 3 {
+					// Возвращаем значения по умолчанию, чтобы избежать паники
+					return "", 0
 				}
-				// Если формат не соответствует, возвращаем пустой IP и порт 0
-				return "", 0
+				ip := matches[1]
+				port, err := strconv.Atoi(matches[2])
+				if err != nil {
+					return ip, 0
+				}
+				return ip, port
 			}
 			ip1, port1 := getIPAndPort(openHosts[i])
 			ip2, port2 := getIPAndPort(openHosts[j])
 
 			// Сравниваем IP-адреса
-			ip1Parts := strings.Split(ip1, ".")
-			ip2Parts := strings.Split(ip2, ".")
-			for k := 0; k < 4; k++ {
-				num1, _ := strconv.Atoi(ip1Parts[k])
-				num2, _ := strconv.Atoi(ip2Parts[k])
-				if num1 != num2 {
-					return num1 < num2
+			if ip1 != ip2 {
+				ip1Parts := strings.Split(ip1, ".")
+				ip2Parts := strings.Split(ip2, ".")
+				for k := 0; k < 4; k++ {
+					num1, _ := strconv.Atoi(ip1Parts[k])
+					num2, _ := strconv.Atoi(ip2Parts[k])
+					if num1 != num2 {
+						return num1 < num2
+					}
 				}
 			}
 			// Если IP одинаковые, сравниваем порты
 			return port1 < port2
 		})
 
-		// Обновляем listHost, чтобы открытые порты были отсортированы, а закрытые остались в порядке добавления
-		listHost = append(openHosts, listHost...)
-		seen := make(map[string]bool)
-		var uniqueListHost []string
-		for _, host := range listHost {
-			if !seen[host] {
-				seen[host] = true
-				uniqueListHost = append(uniqueListHost, host)
-			}
-		}
-		listHost = uniqueListHost
+		// Обновляем listHost только отсортированными открытыми хостами
+		listHost = openHosts
 	}
 
 	switch key {
